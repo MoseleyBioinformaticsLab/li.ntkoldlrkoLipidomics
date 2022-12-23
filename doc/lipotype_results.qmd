@@ -1,0 +1,279 @@
+---
+title: "Lipotype pNT Lipid Results"
+author: "Robert M Flight"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+format:
+  docx:
+    keep-md: true
+bibliography: li_ntko.json
+csl: plos-computational-biology.csl
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r}
+#| label: setup
+#| include: false
+knitr::opts_chunk$set(echo = FALSE,
+                      warning = FALSE,
+                      message = FALSE,
+                      fig.width = 10,
+                      fig.height = 8,
+                      dev = c('png', 'svg'),
+                      dpi = 600)
+```
+
+```{r}
+#| label: load-targets
+#| include: false
+source(here::here("packages.R"))
+tar_load(c(eval_lipotype_file, 
+           lt_all_annotations,
+           lt_sig_cor,
+           padjust_limit,
+           lt_correlation_sig,
+           lt_sig_heatmaps,
+           lt_updown_plots))
+
+# # If your chunk output is shown in-line, then you'll need to wrap tar_load()
+# # like so:
+# 
+# withr::with_dir(here::here(), {
+#   tar_load(c(target_1, target_2, target_3))
+# })
+# 
+# # This is not needed when using tar_make() to render the document.
+```
+
+## Purpose
+
+Two purposes to this report.
+1 - Evaluate the reports and results that Lipotype sent (see [here](#Lipotype-Results-Evaluation), and a [summary](#Evaluation-Summary)); 2 - Analyze the Lipotype data ourselves and find some conclusions (see [here](#pNT-to-Lipid-Correlation), and a [summary](#pNT-Correlation-Summary)).
+
+## Lipotype Results Evaluation
+
+```{r}
+#| label: include_evaluation
+#| child: !expr eval_lipotype_file
+```
+
+## pNT to Lipid Correlation
+
+### Methods
+
+#### Extract Fatty-Acids and Replace TAG
+
+From the supplied species level and fatty-acid level data, we created a new data matrix that includes the various individual TAG fatty-acid species.
+For example, in the original species level data there is a single entry for TAG 40:0, however; at the fatty-acid level that single TAG 40:0 includes entries with FA of 10:0, 12:0, 14:0, 16:0, and 18:0.
+Therefore, in this example, the **single TAG 40:0** will be replaced with **five different FA entries**.
+
+#### Correlation
+
+Information-content-informed Kendall-tau (ICI-Kt) was used to calculate correlation tau and p-values for each combination of pNT and lipid species [@flightInformationContentInformedKendalltauCorrelation2022a].
+ICI-Kt allows the inclusion of missing values, assuming that the missing values are the result of truncated normal due to analyte levels being below the level of detection.
+Given we expect that this is the most likely reason for values to be missing, it is a reasonable assumption, and therefore using ICI-Kt is appropriate.
+Another advantage of ICI-Kt is that it is distribution agnostic, and does not assume that the two variables are related in a linear fashion, merely that the relative pairwise differences between points are similar or dissimilar.
+P-values were adjusted for false-discoveries using Bejamini-Hochberg method in {stats::p.adjust} (v 4.2.1) [@benjaminiControllingFalseDiscovery1995; @rcoreteamLanguageEnvironmentStatistical2021a].
+
+#### Annotations & Binomial Enrichment
+
+The lipid annotations we extract include the total carbon chain length and number of double bonds across all fatty-acids, the first and second (if present) fatty-acid chain length and number of double bonds, as well as the combination of lipid class and these values.
+
+For each lipid annotation, we extract the list of lipids that had an adjusted ICI-Kt p-value <= 0.05, and take their correlation values.
+We use a binomial test on the number of positive and negative correlated lipid features to evaluate how far from an expected random distribution of 50% positive to 50% negative correlations, as implemented in categoryCompare2 [@flightCategoryCompare22021].
+The p-values from the binomial test are adjusted for false-discoveries using the Benjamini-Hochberg method.
+
+#### Calculations
+
+All methods and calculations were implemented in R v 4.2.1 [@rcoreteamLanguageEnvironmentStatistical2021a], with execution managed by {targets} v 0.12.1 [@landauTargetsPackageDynamic2021a].
+Data manipulation relied heavily on {dplyr} v 1.0.10 [@wickhamDplyrGrammarData2022].
+Some lipid annotations were provided by processing with {lipidr} v 2.11.1 [@mohamedLipidrDataMining2022].
+Graphs were generated using {ggplot2} v 3.3.6 [@wickhamGgplot2ElegantGraphics2016].
+
+### Results
+
+#### pNT - Lipid Correlation
+
+Calculating the information-content-informed Kendall-tau (ICI-Kt) correlation of all lipid species to the pNT values results in a distribution that is skewed to the right.
+@fig-ici-kt-cor shows the distribution of correlation values observed across all (grey) and for significant (adjusted-p-value <= 0.05) lipids.
+
+```{r}
+#| label: fig-ici-kt-cor
+#| fig-cap: !expr paste0("All (grey) and significant (black, adjusted-p-value <= ", padjust_limit, ") ICI-Kt correlations of lipid species with pNT across the patients. Red line is the median of all ICI-Kt values.")
+ici_kt_lipids = lt_sig_cor |>
+  ggplot(aes(x = correlation)) +
+  geom_histogram(bins = 100, fill = "lightgrey") +
+  geom_vline(aes(xintercept = median(correlation)), color = "red") +
+  geom_histogram(data = lt_sig_cor |>
+                   dplyr::filter(significant),
+                 bins = 100, fill = "black") +
+  scale_y_continuous(expand = expansion(mult = c(0, .1))) +
+  labs(x = "Lipid - pNT ICI-Kt")
+ici_kt_lipids
+```
+
+#### Lipid Class Binomial Enrichments
+
+Each lipid was annotated according to various criteria, including lipid class, total and fatty-acid chain specific numbers of carbons and double bonds, and combinations thereof.
+For each annotation, we tested the number of positive- and negative-ICI-Kt lipids compared to an expectation of 50/50 positive / negative using a binomial test.
+Tables 2 (positive) and 3 (negative) lists the significant annotations (adjusted-p-value <= `r padjust_limit`) by their overall correlation.
+The lipid annotations with the most significant adjusted-p-values are those with **18 carbon chain lengths**.
+Interestingly, almost **all** significant correlating lipids of several lipid classes all show positive correlations to pNT, including LPC, PC, PC O-, PE, PE O-, and PI.
+TAG, while having a mix of positive and negative correlating lipids, is still overwhelmingly positive, with 2X as many positive correlating lipids compared to negative (82 vs 39).
+Those lipids that are overwhelmingly negative are the TAG fatty-acids of length 16 and 22, as shown in Table 3.
+
+Table 2. Significantly enriched lipid annotations, overall positive correlations.
+
+```{r}
+pretty_positive = lt_correlation_sig |>
+  dplyr::filter(overall_cor %in% "positive") |>
+  dplyr::arrange(padjust) |>
+  format_p_values() %>%
+  dplyr::select(annotation, overall_cor, num_positive, num_negative, p, padjust) %>%
+  flextable::flextable() %>%
+  flextable::colformat_double(digits = 2) %>%
+  flextable::set_header_labels(
+    overall_cor = "Overall Cor",
+    annotation = "Lipid Annotation",
+    num_positive = "N Positive",
+    num_negative = "N Negative",
+    p = "P-Value",
+    padjust = "Adjusted P-Value"
+  ) %>%
+  flextable::set_table_properties(layout = "autofit")
+pretty_positive
+```
+<br>
+
+Table 3. Significantly enriched lipid annotations, overall positive correlations.
+
+```{r}
+pretty_negative = lt_correlation_sig |>
+  dplyr::filter(overall_cor %in% "negative") |>
+  dplyr::arrange(padjust) |>
+  format_p_values() %>%
+  dplyr::select(annotation, overall_cor, num_positive, num_negative, p, padjust) %>%
+  flextable::flextable() %>%
+  flextable::colformat_double(digits = 2) %>%
+  flextable::set_header_labels(
+    overall_cor = "Overall Cor",
+    annotation = "Lipid Annotation",
+    num_positive = "N Positive",
+    num_negative = "N Negative",
+    p = "P-Value",
+    padjust = "Adjusted P-Value"
+  ) %>%
+  flextable::set_table_properties(layout = "autofit")
+pretty_negative
+```
+
+#### Median Correlations by Lipid Class
+
+We can summarize these lipid classes by their median correlations for each lipid class, total (@fig-total-med-cor), TAG (@fig-total-tag-med-cor), and fatty-acid (@fig-fatty-acid-med-cor) specific carbon length and double bond count.
+
+```{r}
+#| label: fig-total-med-cor
+#| fig-cap: "Total median ICI-Kt correlations for significant lipid species."
+n_color = 20
+cor_cols = circlize::colorRamp2(seq(-0.1, 0.1, length.out = n_color), scico::scico(n_color, palette = "vik"))
+Heatmap(lt_sig_heatmaps$total,
+        col = cor_cols,
+        name = "ICI-Kt",
+        cluster_rows = FALSE,
+        cluster_columns = FALSE,
+        row_names_side = "left",
+        column_names_side = "top")
+```
+
+```{r}
+#| label: fig-total-tag-med-cor
+#| fig-cap: "Total median ICI-Kt correlations for significant TAG lipid species."
+n_color = 20
+cor_cols = circlize::colorRamp2(seq(-0.1, 0.1, length.out = n_color), scico::scico(n_color, palette = "vik"))
+Heatmap(lt_sig_heatmaps$tag,
+        col = cor_cols,
+        name = "ICI-Kt",
+        cluster_rows = FALSE,
+        cluster_columns = FALSE,
+        row_names_side = "left",
+        column_names_side = "top")
+```
+
+```{r}
+#| label: fig-fatty-acid-med-cor
+#| fig-cap: "Fatty-acid median ICI-Kt correlations for significant lipid species."
+Heatmap(lt_sig_heatmaps$fa, col = cor_cols,
+        name = "ICI-Kt",
+        cluster_rows = FALSE,
+        cluster_columns = FALSE,
+        row_names_side = "left",
+        column_names_side = "top")
+```
+
+#### Number of Positive-Negative-Correlation
+
+Alternatively, we can look at the number of positively and negatively correlating features for each number of carbons and double bonds.
+
+```{r}
+#| label: fig-lpc_class_updown
+#| fig-cap: "LPC number of positive and negative correlating entries by chain length and number of double bonds."
+patchwork::wrap_plots(lt_updown_plots$LPC, nrow = 1)
+```
+
+```{r}
+#| label: fig-pc_class_updown
+#| fig-cap: "PC number of positive and negative correlating entries by chain length and number of double bonds."
+patchwork::wrap_plots(lt_updown_plots$PC, nrow = 1)
+```
+
+```{r}
+#| label: fig-pco_class_updown
+#| fig-cap: "PC O- number of positive and negative correlating entries by chain length and number of double bonds."
+patchwork::wrap_plots(lt_updown_plots$`PC O-`, nrow = 1)
+```
+
+```{r}
+#| label: fig-pe_class_updown
+#| fig-cap: "PE number of positive and negative correlating entries by chain length and number of double bonds."
+patchwork::wrap_plots(lt_updown_plots$PE, nrow = 1)
+```
+
+```{r}
+#| label: fig-peo_class_updown
+#| fig-cap: "PE O- number of positive and negative correlating entries by chain length and number of double bonds."
+patchwork::wrap_plots(lt_updown_plots$`PE O-`, nrow = 1)
+```
+
+```{r}
+#| label: fig-pi_class_updown
+#| fig-cap: "PI number of positive and negative correlating entries by chain length and number of double bonds."
+patchwork::wrap_plots(lt_updown_plots$PI, nrow = 1)
+```
+
+```{r}
+#| label: fig-tag_class_updown
+#| fig-width: 12
+#| fig-height: 7
+#| fig-cap: "TAG number of positive and negative correlating entries by chain length and number of double bonds."
+patchwork::wrap_plots(lt_updown_plots$TAG, nrow = 1)
+```
+
+### pNT Correlation Summary
+
+* The lipid features overall tend to be more positively correlated with pNT levels across patients.
+* The lipid annotations with the most extreme p-values include **fatty-acid chains with 18 carbons** (see Table 2).
+  * This is also confirmed in the median correlation heatmaps, where 18:0 and 18:1 have the most positive median correlation values.
+  * Further demonstrated in the positive- / negative-count plots of Figure 8 - 14, where the peak in positive seems to commonly be at a fatty-acid chain length of 18.
+  * C18:0 likely corresponds to stearic acid, and a common C18:1 fatty-acid is oleic acid.
+* There are many classes of lipids where either all or most of the significantly correlating features are positively correlated, including:
+  * LPC
+  * LPC O-
+  * PC
+  * PC O-
+  * PE
+  * PE O-
+  * PI
+  * TAG
+* In contrast to the others, where they are almost all positive, TAG does show a mixture of positively and negatively correlated lipid features, with increasing negatively correlated features with increasing numbers of carbons and double bonds.
+
+## References

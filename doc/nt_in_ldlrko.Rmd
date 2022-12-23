@@ -1,0 +1,267 @@
+---
+title: "Nt in Ldlr KO"
+author: "Robert M FLight"
+output: 
+  word_document:
+    keep_md: true
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+source(here::here("packages.R"))
+lapply(list.files(here::here("./R"), full.names = TRUE), source)
+
+knitr::opts_chunk$set(echo = FALSE,
+                      message = FALSE,
+                      warning = FALSE,
+                      dpi = 600,
+                      dev = c('png', 'svg'),
+                      fig.process = dn_modify_path)
+```
+
+```{r load-targets, include=FALSE}
+tar_load(c(feature_binom_diff,
+           pairwise_trim,
+           ko_normalized,
+           feature_info,
+           feature_annotations))
+ko_info = tar_read(ko_info_nooutlier)
+ko_allinfo = tar_read(ko_info)
+```
+
+
+## Purpose
+
+This analysis examines changes in lipid abundances between Nt WT and KO in Ldlr KO mice fed a western (high fat) diet.
+
+## Methods
+
+### Quality Control & Quality Assurance
+
+Overall sample quality-control and quality-assurance was checked by a combination of principal component analysis (PCA) and information-content-informed Kendall-tau correlation.
+A lipid feature was kept for QC/QA and analysis if it was present in at least three of nine samples for each Nt genotype.
+Lipid species concentrations were log-transformed using log(conc + 1), and each samples values were centered prior to PCA.
+Sample scores from PC1 and PC2 were plotted to evaluate sample grouping.
+PC1 was responsible for 97% of the overall variance, and separated the Ldlr WT and KO genotypes.
+No separation of Nt genotypes was observed.
+
+Sample-sample pairwise ICI-Kt correlation used the raw lipid species concentrations from each sample.
+Correlation confirmed that the samples group primarily along Ldlr genotype, with high correlations observed within Ldlr genotype with little concern for Nt genotype.
+
+Two samples in the Nt KO - Ldlr KO were removed based on testing the distribution of ICI-Kt correlation values for each genotype.
+
+### Normalization & Imputation
+
+Plotting log-transformed lipid species concentrations confirmed that lipid concentrations should be normalized prior to further analysis.
+We normalized each sample by subtracting the median of non-missing log-transformed concentrations.
+After normalization, we defined the distribution of observed values using the log-transformed values across all samples, and calculated a missing value replacement as:
+
+$$imp_{value} = exp(dist_{low} + 0.01\times dist_{low})$$
+
+We replaced all zero values in each sample with $imp_{value}$.
+
+### Calculation of Nt KO / Nt WT Log-Fold-Changes
+
+We start by filtering to those lipid features with non-missing values in 33% of either Nt KO or Nt WT.
+For each feature, we remove any imputed / missing values, unless **all values** for a genotype are imputed / missing.
+The log-fold-changes of the means for each feature are calculated using the remaining values.
+
+### Number of Lipid Species
+
+```{r number_lipid_species}
+tar_load(ko_matrix)
+ldlr_ko_info = ko_allinfo %>%
+  dplyr::filter(grepl("ldKO", group_short))
+ldlr_ko_matrix = ko_matrix[, ldlr_ko_info$sample_id]
+
+ldlr_ko_allna = apply(ldlr_ko_matrix, 1, function(.x){sum(is.na(.x)) == ncol(ldlr_ko_matrix)})
+
+ldlr_ko_matrix_has1 = ldlr_ko_matrix[!ldlr_ko_allna, ]
+
+ldlr_noout_info = ko_info %>%
+  dplyr::filter(grepl("ldKO", group_short))
+
+ldlr_ko_outliers = ldlr_ko_info %>%
+  dplyr::filter(!(sample_id %in% ldlr_noout_info$sample_id)) %>%
+  dplyr::select(sample_id, group_short) %>%
+  dplyr::group_by(group_short) %>%
+  dplyr::summarise(n_out = n())
+
+ldlr_ko_matrix_noout = ldlr_ko_matrix_has1[, ldlr_noout_info$sample_id]
+ldlr_ko_nout_allna = apply(ldlr_ko_matrix_noout, 1, function(.x){sum(is.na(.x)) == ncol(ldlr_ko_matrix_noout)})
+ldlr_ko_matrix_noout_has1 = ldlr_ko_matrix_noout[!ldlr_ko_nout_allna, ]
+
+ldlr_ko_matrix_noout_has1[is.na(ldlr_ko_matrix_noout_has1)] = 0
+ldlr_ko_matrix_noout_keep = t(keep_non_zero_percentage(t(ldlr_ko_matrix_noout_has1), sample_classes = ldlr_noout_info$group_name, keep_num = 0.33))
+
+n_per_class = feature_info %>%
+  dplyr::filter(feature_id %in% rownames(ldlr_ko_matrix_noout_keep)) %>%
+  dplyr::group_by(class) %>%
+  dplyr::summarise(n_per_class = dplyr::n()) %>%
+  dplyr::arrange(dplyr::desc(n_per_class))
+```
+
+* Ldlr KO samples: `r ncol(ldlr_ko_matrix)`
+* Ldlr KO lipids in at least one sample: `r nrow(ldlr_ko_matrix_has1)`
+* Ldlr KO outlier samples: 
+
+```{r show_outliers}
+flextable(ldlr_ko_outliers) %>%
+  autofit()
+```
+
+* Ldlr KO no-outliers samples: `r ncol(ldlr_ko_matrix_noout)`
+* Ldlr KO no-outliers lipids in at least one sample: `r nrow(ldlr_ko_matrix_noout_has1)`
+* Ldlr KO no-outliers lipids in 33% of samples in each class: `r nrow(ldlr_ko_matrix_noout_keep)`
+* Ldlr number of lipids by class:
+
+```{r show_classes}
+flextable(n_per_class) %>%
+  autofit()
+```
+
+### Principal Component Analysis
+
+Normalized, imputed, log-transfomed (log) values for each feature across all samples were used for PCA.
+We tested the association of Nt genotype with principal component (PC) via an ANOVA test of sample scores against Nt genotype, where it is assumed that the input sample genotype (X) explains the PC score (Y).
+All PC scores are tested against the Nt genotype using the *visualizationQualityControl::visqc_test_pca_scores* function.
+
+### Lipid Annotation Binomial Tests
+
+Log-fold-change directions for each feature were taken from the differential analysis (see previous).
+Using {lipidr} (v 2.11.1), we annotated each lipid feature with their lipid class, total and chain specific numbers of carbons, as well as total and chain specific numbers of double bonds, and combinations thereof.
+Subsequently, for each lipid annotation, we test if the features in that annotation has LFCs more in one direction or another more than expected by chance, where the null hypothesis is that the fold-change directions are a mix of 50-50.
+We remove any LFC = 0 from the binomial test calculation.
+We corrected the p-values from testing multiple lipid classes using the Benjamini-Hochberg correction.
+{categoryCompare2} (v 0.100.3) was used for the binomial tests.
+
+```{r setup_figures_tables}
+figure_count = dn_counter$new("Figure ")
+figure_count$increment("binomial_methods")
+table_count = dn_counter$new("Table ")
+```
+  
+```{r binomial_methods, dn_id = figure_count}
+knitr::include_graphics(here::here("doc/binomial_testing_example_tag_ldlrko.png"), rel_path = FALSE)
+```
+
+`r figure_count$label_text("binomial_methods")`.
+Illustration of binomial testing procedure for lipid classes.
+From top to bottom:
+1 - Example log-abundances for lipid features (rows) in the same lipid class across samples (columns) in two groups of samples, with missing values indicated by "NA".
+2 - The mean log-abundance for each lipid feature in each of the two sample groups.
+3 - The log-fold-changes (group 2 - group 1) for each lipid feature.
+4 - Bar chart showing the number of positive and negative log-fold-changes for the lipid class annotations.
+These values are used directly for the binomial test to calculate a p-value that this difference could occur by chance.
+5 - Bar chart of the number of positive and negative LFC features in each lipid class across lipid classes.
+
+
+## Results
+
+### Association of Principal Component Scores and Nt Genotype
+
+```{r increment_table}
+table_count$increment("pca_test")
+```
+
+`r table_count$label_text("pca_test")`. 
+Descriptors of the first four principal components from PCA decomposition of Ldlr KO normalized abundances.
+Percent is the percent total variance accounted for by that principal component. P.value and associated statistics are from an ANOVA test of sample scores in that principal component to the Nt genotype status (KO or WT).
+
+```{r pca_table}
+ldlrko_info = ko_info %>%
+  dplyr::filter(ldlr_status %in% "ko")
+ldlrko_abund = ko_normalized$normalized_data[, ldlrko_info$sample_id]
+
+ldlrko_pca = prcomp(t(log(ldlrko_abund)), center = TRUE, scale. = FALSE)
+pc_var = visqc_score_contributions(ldlrko_pca$x) %>%
+  dplyr::mutate(percent = format(percent * 100, digits = 1))
+
+ldlrko_test = visqc_test_pca_scores(ldlrko_pca$x, ldlrko_info[, c("nt_status"), drop = FALSE])
+
+ldlrko_results = ldlrko_test %>%
+  dplyr::left_join(., pc_var[, c("pc", "percent")], by = c("PC" = "pc")) %>%
+  dplyr::filter(PC %in% c("PC1", "PC2", "PC3", "PC4")) %>%
+  dplyr::mutate(p.value = format(p.value, digits = 2)) %>%
+  dplyr::select(PC, percent, p.value, sumsq, meansq, statistic) %>%
+  knitr::kable(digits = 1, align = 'lrrrrr')
+ldlrko_results
+```
+
+To verify that the Nt genotype did have some measurable effect on the overall lipid abundances, we tested for an association of PCA sample scores in each principal component and Nt genotype in the Ldlr KO samples.
+`r table_count$label_text("pca_test")` shows the percent contributed variance, as well as p-values and associated statistics for the first four principal components.
+PC2 is the only PC with a p-value <= 0.05, and still contributes a relatively large percentage of the variance.
+
+### Nt KO / Nt WT in Ldlr KO Binomial Test
+
+```{r count_binomial_results}
+figure_count$increment("binomial_bargraph")
+figure_count$increment("binomial_results")
+figure_count$increment("tag_ldlrko")
+```
+
+For each lipid annotation, we calculated log-fold-changes for all the lipid features belonging to that lipid annotation, and classified each LFC as positive or negative (LFC > 0 or LFC < 0).
+The collection of LFC for the lipid annotation then define counts of positive and negative counts for a binomial test, where the expected ratio for null results is 50 / 50.
+
+`r figure_count$label_text("binomial_bargraph")` displays the adjusted p-values for the various lipid classes and annotations tested.
+
+`r figure_count$label_text("binomial_results")` graphically shows the number of positive and negative LFC lipid features for each class, ordered by increasing adjusted p-value.
+Triacylglycerols (TAG) have the most lipid features, and correspondingly, the lowest adjusted-p-value over all the lipid classes, followed by 
+
+```{r binomial_bargraph, dn_id = figure_count, fig.width = 8, fig.height = 10}
+binom_cut = 0.05
+binom_res = feature_binom_diff$x4_3
+binom_sig = binom_res |>
+  dplyr::filter(padjust <= binom_cut) |>
+  dplyr::mutate(logp = -1 * log10(padjust)) |>
+  dplyr::arrange(logp) |>
+  dplyr::mutate(annotation = factor(annotation, levels = annotation, ordered = TRUE))
+binom_res_graph = binom_sig |>
+  ggplot(aes(x = logp, y = annotation, fill = overall_fc)) +
+  geom_col() +
+  scale_x_continuous(expand = expansion(mult = c(0, 0.1))) +
+  labs(x = "-1 x Log10(Adjusted-P-Value)") +
+  theme(legend.position = c(0.5, 0.1),
+        axis.text.y = element_text(size = 9)) 
+binom_res_graph
+```
+
+`r figure_count$label_text("binomial_bargraph")`.
+Bar graph of adjusted-p-values (Benjamini-Hochberg) for significant lipid annotations (adjusted-p-value <= 0.05), colored by whether there are more positive- or negative-LogFC Nt KO/WT annotated features.
+
+```{r binomial_results, dn_id = figure_count, fig.width = 8, fig.height = 5}
+just_classes = feature_binom_diff$x4_3 |>
+  dplyr::filter(grepl("class:", annotation)) |>
+  dplyr::mutate(padjust = p.adjust(p, method = "bonferroni")) |>
+  dplyr::mutate(annotation = gsub("class:", "", annotation))
+binom_plot = create_binomial_plot(just_classes)
+binom_plot = binom_plot +
+  labs(x = "Lipid Class", y = "# of Positive & Negative Features")
+binom_plot
+```
+
+`r figure_count$label_text("binomial_results")`.
+Number of positive (red) and negative (blue) LFC lipid features in each lipid class, ordered by adjusted-p-value.
+Black line is zero, blue line denotes those classes with an adjusted-p-value <= 0.05.
+
+Given the binomial results for the TAG lipid class, we sought to examine the TAG lipid features and the counts by number of carbons and double bonds overall and in one of the fatty acid chains.
+`r figure_count$label_text("tag_ldlrko")` shows the distribution of TAG lipid features in the positive and negative direction by number of carbons and double bonds.
+We can see that the Nt KO has lower abundance of TAG lipids with 45 - 55 carbons and few double bonds.
+
+```{r tag_ldlrko, dn_id = figure_count, fig.width = 12, fig.height = 7}
+annotation_break = chain_total_len_db(feature_annotations)
+ldlrko_lfc = pairwise_trim$x4_3
+ldlrko_lfc = dplyr::left_join(
+  ldlrko_lfc[, c("logFC", "name")], annotation_break, by = "name")
+
+tag_lfc = ldlrko_lfc %>%
+  dplyr::filter(class %in% "TAG")
+
+tag_updown_plot = up_down_len(tag_lfc)
+
+wrap_plots(tag_updown_plot, nrow = 1)
+```
+
+`r figure_count$label_text("tag_ldlrko")`.
+Counts of the number of triacylglyerol lipid features with different numbers of total carbon (C_total), total double bonds (Dbl_total), chain carbon (C_chain), chain double bonds (Dbl_chain) with negative LFC (blue) or positive LFC (red).

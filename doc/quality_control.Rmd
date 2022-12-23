@@ -1,0 +1,337 @@
+---
+title: "Nt KO Quality Control"
+author: "Robert M Flight"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output: 
+  word_document:
+    keep_md: true
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE,
+                      fig.width = 8, fig.height = 5)
+## target knits Rmds in their own session, so load libraries here.
+source(here::here("packages.R"))
+lapply(list.files("./R", full.names = TRUE), source)
+```
+
+
+## Purpose
+
+To run quality-assurance / quality-control of the Nt knock-out samples and see if any samples should be removed prior to analysis.
+
+## Analysis
+
+### Load Data
+
+We should have 2 groups with 9 samples each, with Nt WT and KO in Ldlr KO.
+
+```{r load_data}
+ko_matrix_single = targets::tar_read("ko_matrix_three")
+ko_info = targets::tar_read("ko_info")
+targets::tar_load("ko_normalized")
+targets::tar_load("sample_manifest")
+targets::tar_load("ko_info_block")
+flextable::flextable(as.data.frame(table(ko_info$group_name))) %>%
+  flextable::autofit()
+```
+
+
+### Principal Components Analysis (PCA)
+
+We decompose the log-transformed values using principal component analysis (PCA), which should give us an idea of how the samples are behaving relative to each other.
+Ideally, we should see 4 clusters of the samples.
+
+```{r pca_analysis}
+ko_pca = prcomp(t(log1p(ko_matrix_single)), center = TRUE, scale. = FALSE)
+ko_pca_info = cbind(as.data.frame(ko_pca$x), ko_info)
+
+ko_pca_var = visualizationQualityControl::visqc_score_contributions(ko_pca$x)
+
+pca_plot = ggplot(ko_pca_info, aes(x = PC1, y = PC2, color = group_name)) + 
+  geom_point(size = 3) +
+  labs(x = get_pc_label(ko_pca_var, "PC1"),
+       y = get_pc_label(ko_pca_var, "PC2"))
+pca_plot
+```
+
+PC1 is responsible for **97%** of the variance, and it is tied to whether **Ldlr** is knock-out or wild-type (concentrate on the legend for the red and purple dots).
+
+We can confirm this by changing to a 1-dimensional plot of the scores on PC1 (just the x-axis from above) and plotting a histogram of the PC values for each sample and coloring by either Ldlr or Nt genotype.
+
+```{r scores_plot}
+scores_plot_nt_1 = ggplot(ko_pca_info, aes(x = PC1, fill = nt_status)) +
+  geom_histogram(position = "identity") +
+  labs(x = "Sample score on PC1",
+       subtitle = "Samples colored by Nt status.")
+scores_plot_nt_2 = ggplot(ko_pca_info, aes(x = PC2, fill = nt_status)) +
+  geom_histogram(position = "identity") +
+  labs(x = "Sample score on PC2",
+       subtitle = "Samples colored by Nt status.")
+scores_plot_nt_1 / scores_plot_nt_2
+```
+
+We can see that plotting the scores for the samples in a histogram, and coloring by Ldlr or Nt gene status, the Ldlr is what is separating the samples from each other, regardless of Nt gene status.
+
+This makes sense, I think, because without Ldlr, then I'm going to assume that LDL is not going to get pulled from the blood.
+
+We can actually test the various groupings of samples, from genotypes to groupings we observed in the sample order (see further down).
+
+```{r test_groups}
+ko_info_block2 = dplyr::left_join(ko_info, ko_info_block[, c("sample_id", "block")], by = "sample_id")
+full_scores_test = visqc_test_pca_scores(ko_pca$x, ko_info_block2[, c("nt_status", "block")])
+
+ko_pca_info2 = dplyr::left_join(ko_pca_info, ko_info_block[, c("sample_id", "block")], by = "sample_id")
+
+full_scores_test %>%
+  dplyr::filter(p.value <= 0.05) %>%
+  dplyr::select(PC, variable, p.value)
+
+ko_pca_info2 %>%
+  ggplot(aes(x = PC1, y = PC2, color = as.factor(block))) +
+  geom_point(size = 2) +
+  labs(x = get_pc_label(ko_pca_var, "PC1"),
+       y = get_pc_label(ko_pca_var, "PC2"))
+```
+
+We can see here that the "block" corresponds very well to the PC's.
+
+### ICI-Kt Correlation
+
+For each sample, we calculate the information-content-informed Kendall-tau (ICI-Kt) correlation with all other smaples.
+ICI-Kt allows the missing values to contribute information to the correlation coefficient calculated.
+The diagonal represents what fraction of the total metabolites observed are present in an individual sample.
+The heatmap displayed is reflected above and below the diagonal.
+Any row or column is the correlation of that sample with the other samples.
+Ideally, we see blocks of high correlation (greenish - yellow) within samples from the same group, and **lower** correlation between different groups.
+
+```{r correlation}
+ko_info = ko_info %>%
+  dplyr::mutate(group_short2 = 
+                  dplyr::case_when(
+      group_short %in% "ntKO_ldWT" ~ "ldWT_ntKO",
+      group_short %in% "ntKO_ldKO" ~ "ldKO_ntKO",
+      group_short %in% "ntWT_ldWT" ~ "ldWT_ntWT",
+      group_short %in% "ntWT_ldKO" ~ "ldKO_ntWT"
+                  ))
+ko_cor = ici_kendalltau(t(ko_matrix_single))
+
+ko_cor_colors = ggplot2::scale_color_discrete()$palette(2)
+names(ko_cor_colors) = unique(ko_info$group_short)
+
+cor_vals = ko_cor$cor
+
+cor_vals = cor_vals[ko_info$sample_id, ko_info$sample_id]
+ko_info = as.data.frame(ko_info)
+rownames(ko_info) = ko_info$sample_id
+cor_order = similarity_reorderbyclass(cor_vals, ko_info[, "group_short", drop = FALSE], transform = "sub_1")
+
+ko_info2 = ko_info[cor_order$indices, ]
+cor_vals2 = cor_vals[ko_info2$sample_id, ko_info2$sample_id]
+color_list = list(group_short = ko_cor_colors)
+row_annotation = HeatmapAnnotation(df = as.data.frame(ko_info2[, c("group_short"), drop = FALSE]),
+                                  col = color_list, which = "row",
+                                  show_annotation_name = FALSE)
+col_annotation = HeatmapAnnotation(df = as.data.frame(ko_info2[, c("group_short"), drop = FALSE]),
+                                  col = color_list, which = "column",
+                                  show_legend = FALSE, show_annotation_name = FALSE)
+
+cor_map = circlize::colorRamp2(seq(0.8, 1, length.out = 20), viridis::viridis(20))
+
+Heatmap(cor_vals2, col = cor_map, name = "ICI-Kt",
+        bottom_annotation = col_annotation,
+        right_annotation = row_annotation,
+        cluster_rows = FALSE,
+        cluster_columns = FALSE,
+        column_title = "ICI-Kendell-tau Correlation Heatmap",
+        column_title_gp = gpar(fontsize = 10))
+```
+
+By eye, there do not appear to be any outliers.
+Lets also check using a statistical test of the median correlations for each sample by group.
+
+```{r test_outliers}
+med_cor = median_correlations(cor_vals, ko_info$group_short)
+ko_out = determine_outliers(med_cor)
+ggplot(ko_out, aes(x = sample_class, y = med_cor, color = outlier, group = sample_class)) + 
+  geom_sina(size = 3) +
+  labs(x = "Genotype",
+       y = "Median Correlation")
+```
+
+The statistical test says there are at least two outliers in the **ld-/nt-** group of samples, and based on these median correlations, the dendrogram below, and the correlation heatmap based on differences below, we will remove the two samples from the **ld-/nt-** group.
+
+### Metabolon Provided Order
+
+Metabolon provided the sample measurements in a particular order, where I noticed that the groups were in contiguous **blocks**.
+I'm double checking that if close correlations fall into those same blocks, because if so, that implies that the order they were processed in by Metabolon seems to matter.
+
+```{r check_ko_blocks, fig.height = 8, fig.width = 8}
+library(ggraph)
+
+ko_tree = tidygraph::as_tbl_graph(cor_order$dendrogram)
+ko_tree_block = ko_tree %>%
+  activate(nodes) %>%
+  dplyr::left_join(., ko_info_block[, c("sample_id", "group_short", "block")], by = c("label" = "sample_id")) %>%
+  dplyr::mutate(block = as.character(block))
+
+ko_tree_block %>%
+  ggraph("dendrogram", height = height) +
+  geom_edge_elbow2(aes(color = node.block), width = 2) +
+  geom_node_text(aes(label = group_short), angle = 90, vjust = 0) +
+  coord_cartesian(clip = "off")
+```
+
+Figure Z.
+Dendrogram of sample - sample distances as (1 - ICI-Kt), and colored by which **block** of samples were **possibly** processed together.
+These **blocks** were inferred by the location of samples in the returned Metabolon data sheets.
+
+Figure Z implies that some of the sample grouping is **possibly** due to how they were run in the instrument.
+This **assumes** that the order shown in the data sheet is the order in which they were run on the instrument.
+We have asked for the timestamp of each sample run to confirm if this is indeed the case.
+
+We would recommend sending the samples in a randomized order, or even just **not** by experimental group.
+
+### Do We Need to Normalize Data?
+
+We can also ask if we need to normalize the data before analysis.
+I know Metabolon would claim we don't, but I like to check.
+
+```{r check_to_normalize, fig.width = 16, fig.height = 10}
+log_matrix = as.data.frame(log(ko_matrix_single))
+long_matrix = tidyr::pivot_longer(log_matrix, cols = everything(), names_to = "sample_id", values_to = "intensity")
+long_matrix = dplyr::left_join(long_matrix, ko_info2[, c("sample_id", "group_short2")], by = "sample_id")
+long_matrix = long_matrix %>%
+  dplyr::filter(!is.na(intensity), !is.infinite(intensity))
+long_matrix$sample_id = factor(long_matrix$sample_id, levels = ko_info2$sample_id, ordered = TRUE)
+
+median_matrix = long_matrix %>%
+  dplyr::group_by(sample_id) %>%
+  dplyr::summarise(intensity = median(intensity))
+median_matrix$sample_id = factor(median_matrix$sample_id, levels = ko_info2$sample_id, ordered = TRUE)
+
+
+ggplot(long_matrix, aes(x = sample_id, y = intensity, color = group_short2, group = sample_id)) + 
+  geom_sina() +
+  geom_point(data = median_matrix, color = "black", size = 2) +
+  theme(axis.text.x = element_text(angle = 90))
+```
+
+Yes, we should definitely normalize the data prior to analysis.
+
+### Correlation of Differences
+
+We have elsewhere observed inverted log-fold-changes between the Ldlr WT and Ldlr KO samples.
+To evaluate if this is something real, we calculated average log-abundance across all samples after removing missing values, and then calculated differences to the mean, and ICI-Kt correlations across samples, including missing values.
+
+```{r load_differences}
+tar_load(ko_diffs_mean)
+
+cor_diff = ici_kendalltau(t(ko_diffs_mean))$cor
+ko_info_diff = ko_info %>%
+  dplyr::filter(sample_id %in% colnames(cor_diff))
+cor_diff = cor_diff[ko_info_diff$sample_id, ko_info_diff$sample_id]
+rownames(ko_info_diff) = ko_info_diff$sample_id
+diff_order = similarity_reorderbyclass(cor_diff, ko_info_diff[, "group_short", drop = FALSE], transform = "sub_1")
+
+diff_info = ko_info_diff[diff_order$indices, ]
+cor_diff2 = cor_diff[diff_info$sample_id, diff_info$sample_id]
+diff_color_list = list(group_short = ko_cor_colors)
+diff_row_annotation = HeatmapAnnotation(df = as.data.frame(diff_info[, c("group_short"), drop = FALSE]),
+                                  col = diff_color_list, which = "row",
+                                  show_annotation_name = FALSE)
+diff_col_annotation = HeatmapAnnotation(df = as.data.frame(diff_info[, c("group_short"), drop = FALSE]),
+                                  col = diff_color_list, which = "column",
+                                  show_legend = FALSE, show_annotation_name = FALSE)
+
+diff_map = circlize::colorRamp2(seq(-1, 1, length.out = 20), scico::scico(20, palette = "vik"))
+
+Heatmap(cor_diff2, col = diff_map, name = "ICI-Kt",
+        bottom_annotation = diff_col_annotation,
+        right_annotation = diff_row_annotation,
+        cluster_rows = FALSE,
+        cluster_columns = FALSE,
+        column_title = "ICI-Kendell-tau Correlation Heatmap",
+        column_title_gp = gpar(fontsize = 10))
+```
+
+Figure X.
+ICI-Kt sample-sample correlation using differences to log-mean across samples.
+
+Figure X above indicates that indeed, the Ldlr KO and Ldlr WT are anti-correlated with one another.
+
+
+### Split PCA
+
+#### Raw Data, Outliers Removed
+
+Because we ended up splitting the data by Ldlr genotype to investigate the effect of the Nt genotype, then there is no reason to keep them together for the PCA.
+So lets see what happens in the PCA if we split by Ldlr genotype first.
+
+```{r split_pca}
+ko_keep = ko_out %>%
+    dplyr::filter(!outlier)
+ko_info_pca = ko_info %>%
+  dplyr::filter(sample_id %in% ko_keep$sample_id) %>%
+  dplyr::left_join(., ko_info_block[, c("sample_id", "block")], by = "sample_id")
+split_ldlr = split(ko_info_pca, ko_info_pca$ldlr_status)
+  
+purrr::iwalk(split_ldlr, function(in_info, info_id){
+  tmp_normalize = ko_matrix_single[, in_info$sample_id]
+  tmp_normalize2 = t(keep_non_zero_percentage(t(tmp_normalize), sample_classes = in_info$nt_status, keep_num = 0.33, zero_value = 0))
+  tmp_pca = prcomp(t(log1p(tmp_normalize2)), center = TRUE, scale. = FALSE)
+  tmp_sd = visqc_score_contributions(tmp_pca$x)
+  tmp_pca_df = cbind(as.data.frame(tmp_pca$x), in_info)
+  
+  tmp_anova = visqc_test_pca_scores(tmp_pca$x, in_info[, c("nt_status", "block"), drop = FALSE])
+  
+  genotype_plot = tmp_pca_df %>%
+    ggplot(aes(x = PC1, y = PC2, color = nt_status)) +
+    geom_point(size = 2) +
+    labs(x = tmp_sd$labels[1], y = tmp_sd$labels[2],
+         subtitle = paste0("Ldlr ", info_id))
+  block_plot = tmp_pca_df %>%
+    ggplot(aes(x = PC1, y = PC2, color = as.factor(block))) +
+    geom_point(size = 2) +
+    labs(x = tmp_sd$labels[1], y = tmp_sd$labels[2])
+  print(paste0("Ldlr ", info_id))
+  print(tmp_anova %>%
+          dplyr::filter(p.value <= 0.05) %>%
+          dplyr::select(PC, variable, p.value))
+  print(genotype_plot | block_plot)
+})
+```
+
+#### Normalized Data, Outliers Removed
+
+The above was all done using the raw data.
+Theoretically, centering the data should achieve the same thing as normalizing the data, but lets double check if doing PCA on the normalized data changes anything.
+
+```{r split_pca_normalized}
+purrr::iwalk(split_ldlr, function(in_info, info_id){
+  tmp_normalize = ko_normalized$normalized_data[, in_info$sample_id]
+  tmp_pca = prcomp(t(log(tmp_normalize)), center = TRUE, scale. = FALSE)
+  tmp_sd = visqc_score_contributions(tmp_pca$x)
+  tmp_pca_df = cbind(as.data.frame(tmp_pca$x), in_info)
+  
+  tmp_anova = visqc_test_pca_scores(tmp_pca$x, in_info[, c("nt_status", "block"), drop = FALSE])
+  
+  genotype_plot = tmp_pca_df %>%
+    ggplot(aes(x = PC1, y = PC2, color = nt_status)) +
+    geom_point(size = 2) +
+    labs(x = tmp_sd$labels[1], y = tmp_sd$labels[2],
+         subtitle = paste0("Ldlr ", info_id))
+  block_plot = tmp_pca_df %>%
+    ggplot(aes(x = PC1, y = PC2, color = as.factor(block))) +
+    geom_point(size = 2) +
+    labs(x = tmp_sd$labels[1], y = tmp_sd$labels[2])
+  print(paste0("Ldlr ", info_id))
+  print(tmp_anova %>%
+          dplyr::filter(p.value <= 0.05) %>%
+          dplyr::select(PC, variable, p.value))
+  print(genotype_plot | block_plot)
+})
+```
+

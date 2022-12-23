@@ -1,0 +1,11 @@
+.Rproj.user
+.Rhistory
+.RData
+.Ruserdata
+renv/
+doc/.~lock.*
+_targets/meta/meta
+_targets/meta/meta
+.Rdata
+.httr-oauth
+.DS_Store
