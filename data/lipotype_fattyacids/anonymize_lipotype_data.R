@@ -1,10 +1,12 @@
 lipotype_pnt = readr::read_csv("data/lipotype_fattyacids/unfiltered/subject_data.csv")
 set.seed(20230103)
 
+# create sequential IDs, and then randomly shuffle them around
+# so that original data order doesn't match them.
 n_id = nrow(lipotype_pnt)
 max_width = nchar(n_id)
 out_format = paste0("%0", max_width, "d")
-new_id = sprintf(out_format, seq(1, n_id))
+new_id = sprintf(out_format, seq(1000, 1000 + n_id))
 new_id = sample(new_id, n_id)
 
 lipotype_pnt$NEWID = new_id
@@ -35,7 +37,8 @@ lipotype_fa_anon = lipotype_fa_anon |>
                    amount = amount)
 
 write.table(lipotype_pnt_anon, file = "data/lipotype_fattyacids/anonymized/subject_data.csv",
-            row.names = FALSE, col.names = TRUE, sep = ",")
+            row.names = FALSE, col.names = TRUE, sep = ",",
+            )
 write.table(lipotype_species_anon, file = "data/lipotype_fattyacids/anonymized/species_nf.csv",
             row.names = FALSE, col.names = TRUE, sep = ",")
 write.table(lipotype_fa_anon, file = "data/lipotype_fattyacids/anonymized/fa_data_nf.csv",
