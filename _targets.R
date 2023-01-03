@@ -144,8 +144,10 @@ tar_plan(
   tar_target(dependencies,
              {
                renv_lockfile
-               devtools::session_info(pkgs = "loaded", to_file = TRUE)
+               devtools::session_info(pkgs = "loaded", to_file = "session-info.txt")
              }),
+  
+  tar_quarto(software_code_data_availability, "doc/software_code_data_availability.qmd"),
   
   tar_target(beep_end,
              {
@@ -156,6 +158,7 @@ tar_plan(
                lipotype_results
                nt_in_ldlrko
                tag_results
+               software_code_data_availability
                beepr::beep(4)
              })
   
