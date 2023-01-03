@@ -43,3 +43,15 @@ write.table(lipotype_species_anon, file = "data/lipotype_fattyacids/anonymized/s
             row.names = FALSE, col.names = TRUE, sep = ",")
 write.table(lipotype_fa_anon, file = "data/lipotype_fattyacids/anonymized/fa_data_nf.csv",
             row.names = FALSE, col.names = TRUE, sep = ",")
+
+# update the column names while we are at it
+lipid_annotation = readr::read_csv("data/lipotype_fattyacids/unfiltered/lipid_data_nf.csv")
+lipid_annotation2 = lipid_annotation |>
+  dplyr::mutate(swisslipids_name = swissname,
+                swisslipids_id = swissid,
+                swisslipids_rank = swissrank,
+                swissname = NULL,
+                swissid = NULL,
+                swissrank = NULL)
+write.table(lipid_annotation2, file = "data/lipotype_fattyacids/anonymized/lipid_data_nf.csv",
+            row.names = FALSE, col.names = TRUE, sep = ",")
