@@ -83,12 +83,11 @@ tar_plan(
   tar_render(nt_in_ldlrko, "doc/nt_in_ldlrko.Rmd"),
   
   # lipotype data --------
-  lipotype_pnt = readr::read_csv("data/lipotype_fattyacids/unfiltered/subject_data.csv") |>
+  lipotype_pnt = readr::read_csv("data/lipotype_fattyacids/anonymized/subject_data.csv") |>
     dplyr::filter(!is.na(PNTS)),
-  lipotype_species = readr::read_csv("data/lipotype_fattyacids/unfiltered/species_nf.zip") |>
+  lipotype_species = readr::read_csv("data/lipotype_fattyacids/anonymized/species_nf.zip") |>
     dplyr::filter(USUBJID %in% lipotype_pnt$USUBJID),
-  lt_species_filtered = filter_lt_species(lipotype_species, 0.7),
-  lipotype_fa = readr::read_csv("data/lipotype_fattyacids/unfiltered/fa_data_nf.zip"),
+  lipotype_fa = readr::read_csv("data/lipotype_fattyacids/anonymized/fa_data_nf.zip"),
   
   lipotype_tag = extract_tagfa(lipotype_fa),
   lipotype_all_species = dplyr::bind_rows(lipotype_species |>
@@ -96,7 +95,7 @@ tar_plan(
                                             dplyr::mutate(feature2 = feature),
                                           lipotype_tag),
   
-  lipotype_annotations = readr::read_csv("data/lipotype_fattyacids/unfiltered/lipid_data_nf.csv"),
+  lipotype_annotations = readr::read_csv("data/lipotype_fattyacids/anonymized/lipid_data_nf.csv"),
   
   #tar_quarto(lipotype_evaluation, "doc/evaluate_lipotype.qmd"),
   
